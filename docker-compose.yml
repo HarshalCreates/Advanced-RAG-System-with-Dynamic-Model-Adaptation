@@ -1,0 +1,30 @@
+services:
+  api:
+    build: .
+    container_name: advanced_rag_api
+    ports:
+      - "8000:8000"
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      COHERE_API_KEY: ${COHERE_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+    volumes:
+      - ./data:/app/data
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  ui:
+    build: .
+    container_name: advanced_rag_ui
+    depends_on:
+      - api
+    ports:
+      - "8501:8501"
+    environment:
+      RAG_API_BASE: http://api:8000
+      RAG_ADMIN_API_KEY: ${ADMIN_API_KEY}
+    command: chainlit run ui/chainlit/langchain_app.py --host 0.0.0.0 --port 8501
+
+
