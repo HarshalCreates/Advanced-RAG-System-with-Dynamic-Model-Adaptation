@@ -17,6 +17,7 @@ from app.models.config import get_settings
 from app.pipeline.ingestion import IngestionPipeline
 from app.retrieval.service import HybridRetrievalService
 from app.generation.factory import GenerationFactory
+from app.generation.reasoning import MultiStepReasoner
 
 
 class PipelineManager:
@@ -29,6 +30,7 @@ class PipelineManager:
         self.generator = GenerationFactory(
             backend=self.settings.generation_backend, model=self.settings.generation_model
         ).build()
+        self.reasoner = MultiStepReasoner()
 
     @classmethod
     def get_instance(cls) -> "PipelineManager":
@@ -163,6 +165,114 @@ class PipelineManager:
             retrieval_strategy="hybrid_weighted",
             timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         )
+        return RAGResponse(
+            answer=answer,
+            citations=chunks,
+            alternative_answers=[],
+            context_analysis=ctx,
+            performance_metrics=perf,
+            system_metadata=meta,
+        )
+    
+    async def query_with_reasoning(self, payload: QueryRequest) -> RAGResponse:
+        """Enhanced query processing with multi-step reasoning."""
+        t_retrieval = 0
+        t_generation = 0
+        t_reasoning = 0
+
+        # Step 1: Retrieval
+        t0 = time.time()
+        fused = self.retriever.search(payload.query, top_k=payload.top_k, filters=payload.filters)
+        t_retrieval = int((time.time() - t0) * 1000)
+
+        # Prepare context chunks for reasoning
+        context_chunks = []
+        for doc_id, score in fused:
+            text = self.retriever.get_text(doc_id)
+            context_chunks.append({
+                'id': doc_id,
+                'text': text,
+                'score': score,
+                'metadata': self.retriever.documents.metadatas.get(doc_id, {})
+            })
+
+        # Step 2: Multi-step reasoning
+        t1 = time.time()
+        try:
+            reasoning_chain = await self.reasoner.reason_step_by_step(
+                payload.query, context_chunks, self.generator
+            )
+            answer_text = reasoning_chain.final_answer
+            reasoning_steps = [step.conclusion for step in reasoning_chain.steps]
+            overall_confidence = reasoning_chain.overall_confidence
+        except Exception as e:
+            print(f"Reasoning failed: {e}")
+            # Fallback to regular generation
+            context_text = "\n\n".join([chunk['text'][:300] for chunk in context_chunks])
+            system_prompt = "You are a helpful assistant. Answer based on the provided context."
+            user_prompt = f"Query: {payload.query}\n\nContext:\n{context_text}"
+            answer_text = self.generator.complete(system=system_prompt, user=user_prompt)
+            reasoning_steps = ["Fallback generation due to reasoning failure"]
+            overall_confidence = 0.5
+        
+        t_reasoning = int((time.time() - t1) * 1000)
+        t_generation = t_reasoning  # Include reasoning time in generation
+
+        # Prepare citations (single best document approach)
+        chunks = []
+        if fused:
+            doc_id, score = fused[0]  # Best result
+            text = self.retriever.get_text(doc_id)
+            
+            # Extract metadata
+            metadata = self.retriever.documents.metadatas.get(doc_id, {})
+            source = metadata.get("source", doc_id.split("__")[0])
+            page = metadata.get("page")
+            
+            chunk = RetrievedChunk(
+                document=source,
+                pages=[page] if page else [],
+                chunk_id=doc_id,
+                excerpt=text[:500],
+                relevance_score=float(score),
+                credibility_score=0.9,  # Higher for reasoning-based results
+                extraction_method="reasoning_enhanced"
+            )
+            chunks.append(chunk)
+
+        # Enhanced answer with reasoning
+        answer = Answer(
+            content=answer_text,
+            reasoning_steps=reasoning_steps,
+            confidence=overall_confidence,
+            uncertainty_factors=["Multi-step reasoning uncertainty"] if overall_confidence < 0.7 else []
+        )
+
+        # Context analysis
+        ctx = ContextAnalysis(
+            total_chunks_analyzed=len(context_chunks),
+            retrieval_methods_used=["dense", "sparse", "graph", "reasoning"],
+            cross_document_connections=len([c for c in context_chunks if c['score'] > 0.7]),
+            temporal_relevance="current"
+        )
+
+        # Performance metrics
+        perf = PerformanceMetrics(
+            retrieval_latency_ms=t_retrieval,
+            generation_latency_ms=t_generation,
+            total_response_time_ms=t_retrieval + t_generation,
+            tokens_processed=len(answer_text.split()),
+            cost_estimate_usd=0.0
+        )
+
+        # System metadata
+        meta = SystemMetadata(
+            embedding_model=self.settings.embedding_model,
+            generation_model=self.settings.generation_model,
+            retrieval_strategy="reasoning_enhanced_hybrid",
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        )
+
         return RAGResponse(
             answer=answer,
             citations=chunks,

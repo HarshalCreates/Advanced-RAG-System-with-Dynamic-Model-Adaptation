@@ -4,6 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import api_router
 from app.api.websocket import ws_router
+from app.api.sse import sse_router
+from app.api.enhanced_routes import enhanced_router
+from app.api.evaluation_routes import evaluation_router
 from app.admin.routes import admin_router
 from app.observability.logging import configure_logging
 from app.observability.metrics import register_metrics
@@ -33,8 +36,11 @@ def create_app() -> FastAPI:
     register_metrics(app)
 
     app.include_router(api_router, prefix="/api")
+    app.include_router(enhanced_router, prefix="/api")
+    app.include_router(evaluation_router, prefix="/api/evaluation")
     app.include_router(admin_router, prefix="/api")
     app.include_router(ws_router)
+    app.include_router(sse_router, prefix="/api")
 
     return app
 

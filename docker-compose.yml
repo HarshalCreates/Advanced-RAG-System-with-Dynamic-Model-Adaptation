@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   api:
     build: .
@@ -7,24 +9,65 @@ services:
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      COHERE_API_KEY: ${COHERE_API_KEY}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
     volumes:
       - ./data:/app/data
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+      - ./uploads:/app/data/uploads
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
 
   ui:
     build: .
     container_name: advanced_rag_ui
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     ports:
       - "8501:8501"
     environment:
       RAG_API_BASE: http://api:8000
-      RAG_ADMIN_API_KEY: ${ADMIN_API_KEY}
+      RAG_ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      CHAINLIT_HOST: 0.0.0.0
+      CHAINLIT_PORT: 8501
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/data/uploads
     command: chainlit run ui/chainlit/langchain_app.py --host 0.0.0.0 --port 8501
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # Optional: Add Ollama service for local LLM support
+  ollama:
+    image: ollama/ollama:latest
+    container_name: advanced_rag_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    profiles:
+      - ollama
+
+volumes:
+  ollama_data:
+
+networks:
+  default:
+    name: advanced_rag_network
 
 

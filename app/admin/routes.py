@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pathlib import Path
 
@@ -10,6 +10,13 @@ from app.embeddings.factory import EmbeddingFactory
 from app.generation.factory import GenerationFactory
 from app.models.config import Settings, get_settings
 from app.retrieval.service import HybridRetrievalService
+from app.deployment.rollback import RollbackManager
+from app.deployment.ab_testing import ABTestingManager
+from app.deployment.canary import CanaryManager
+from app.deployment.load_balancer import LoadBalancerManager
+from app.deployment.validation import DeploymentValidator, ValidationLevel
+from app.monitoring.alerting import AlertingManager
+from app.monitoring.dashboard import MonitoringOrchestrator
 
 
 admin_router = APIRouter(prefix="/admin")
@@ -51,5 +58,120 @@ def hot_swap_retriever(backend: str, x_api_key: str | None = Header(default=None
 def dashboard() -> HTMLResponse:
     html_path = Path(__file__).parent / "templates" / "dashboard.html"
     return HTMLResponse(html_path.read_text())
+
+
+# ===== DEPLOYMENT MANAGEMENT =====
+
+# Initialize deployment managers (lazy initialization)
+_rollback_manager = None
+_ab_testing_manager = None
+_canary_manager = None
+_load_balancer_manager = None
+_deployment_validator = None
+_alerting_manager = None
+_monitoring_orchestrator = None
+
+def get_rollback_manager() -> RollbackManager:
+    global _rollback_manager
+    if _rollback_manager is None:
+        _rollback_manager = RollbackManager()
+    return _rollback_manager
+
+def get_monitoring_orchestrator() -> MonitoringOrchestrator:
+    global _monitoring_orchestrator
+    if _monitoring_orchestrator is None:
+        _monitoring_orchestrator = MonitoringOrchestrator()
+    return _monitoring_orchestrator
+
+
+# ===== MONITORING & DASHBOARDS =====
+
+@admin_router.get("/monitoring/summary")
+def get_monitoring_summary(x_api_key: str | None = Header(default=None)) -> Dict[str, Any]:
+    """Get monitoring system summary."""
+    _auth(x_api_key)
+    
+    monitoring = get_monitoring_orchestrator()
+    return monitoring.get_monitoring_summary()
+
+@admin_router.get("/monitoring/health")
+def get_system_health(x_api_key: str | None = Header(default=None)) -> Dict[str, Any]:
+    """Get system health summary."""
+    _auth(x_api_key)
+    
+    monitoring = get_monitoring_orchestrator()
+    return monitoring.get_system_health_summary()
+
+@admin_router.get("/monitoring/dashboards")
+def get_available_dashboards(x_api_key: str | None = Header(default=None)) -> Dict[str, Any]:
+    """Get available monitoring dashboards."""
+    _auth(x_api_key)
+    
+    monitoring = get_monitoring_orchestrator()
+    dashboards = monitoring.dashboard_manager.get_all_dashboards_summary()
+    return {"dashboards": dashboards}
+
+@admin_router.get("/monitoring/dashboard/{dashboard_id}")
+def get_dashboard_data(dashboard_id: str, x_api_key: str | None = Header(default=None)) -> Dict[str, Any]:
+    """Get dashboard data."""
+    _auth(x_api_key)
+    
+    monitoring = get_monitoring_orchestrator()
+    dashboard_data = monitoring.dashboard_manager.get_dashboard_data(dashboard_id)
+    
+    if not dashboard_data:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    
+    return dashboard_data
+
+@admin_router.get("/monitoring/dashboard/{dashboard_id}/html")
+def get_dashboard_html(dashboard_id: str, x_api_key: str | None = Header(default=None)) -> HTMLResponse:
+    """Get dashboard as HTML page."""
+    _auth(x_api_key)
+    
+    monitoring = get_monitoring_orchestrator()
+    html_content = monitoring.dashboard_manager.generate_dashboard_html(dashboard_id)
+    
+    if not html_content:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    
+    return HTMLResponse(content=html_content)
+
+@admin_router.post("/monitoring/start")
+async def start_monitoring(x_api_key: str | None = Header(default=None)) -> Dict[str, str]:
+    """Start monitoring system."""
+    _auth(x_api_key)
+    
+    monitoring = get_monitoring_orchestrator()
+    
+    # Start monitoring in background
+    import asyncio
+    asyncio.create_task(monitoring.start_monitoring())
+    
+    return {"status": "started", "message": "Monitoring system started"}
+
+
+# ===== ROLLBACK MANAGEMENT =====
+
+@admin_router.post("/rollback/emergency")
+async def emergency_rollback(x_api_key: str | None = Header(default=None)) -> Dict[str, str]:
+    """Trigger emergency rollback to last known good configuration."""
+    _auth(x_api_key)
+    
+    rollback_manager = get_rollback_manager()
+    success = await rollback_manager.emergency_rollback()
+    
+    return {
+        "status": "success" if success else "failed",
+        "message": "Emergency rollback completed" if success else "Emergency rollback failed"
+    }
+
+@admin_router.get("/rollback/stats")
+def get_rollback_stats(x_api_key: str | None = Header(default=None)) -> Dict[str, Any]:
+    """Get rollback statistics."""
+    _auth(x_api_key)
+    
+    rollback_manager = get_rollback_manager()
+    return rollback_manager.get_rollback_stats()
 
 
