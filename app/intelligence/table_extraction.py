@@ -182,28 +182,107 @@ class FigureExtractor:
         self.figure_types = ['chart', 'graph', 'diagram', 'image', 'plot']
     
     def extract_figures_from_pdf(self, pdf_content: bytes, filename: str) -> List[Dict[str, Any]]:
-        """Extract figures from PDF pages."""
+        """Enhanced figure extraction from PDF pages with image detection."""
         figures = []
         
         try:
             from pdf2image import convert_from_bytes
             import pytesseract
+            import numpy as np
             
-            images = convert_from_bytes(pdf_content)
+            # Convert with higher DPI for better image quality
+            images = convert_from_bytes(pdf_content, dpi=200, first_page=None, last_page=None)
             
             for page_num, image in enumerate(images, 1):
-                # Extract text to identify figure captions
-                ocr_text = pytesseract.image_to_string(image)
+                # Extract text with multiple OCR methods
+                ocr_text = self._enhanced_ocr_extraction(image)
+                
+                # Detect if page contains significant non-text content (images/figures)
+                has_visual_content = self._detect_visual_content(image)
                 
                 # Look for figure indicators
                 figure_info = self._analyze_figure_content(image, ocr_text, page_num, filename)
-                if figure_info:
+                
+                # Enhanced detection for pages with images
+                if figure_info or has_visual_content:
+                    if not figure_info:
+                        # Create figure info for visual content without explicit captions
+                        figure_info = {
+                            'id': f"{filename}_visual_p{page_num}",
+                            'page': page_num,
+                            'type': 'visual_content',
+                            'caption': '',
+                            'description': ocr_text[:800] if ocr_text else 'Visual content detected',
+                            'confidence': 0.6,
+                            'image_size': image.size,
+                            'text_length': len(ocr_text),
+                            'has_significant_visual': has_visual_content
+                        }
+                    
                     figures.append(figure_info)
                     
         except Exception as e:
-            print(f"Figure extraction failed: {e}")
+            print(f"Enhanced figure extraction failed: {e}")
         
         return figures
+    
+    def _enhanced_ocr_extraction(self, image) -> str:
+        """Enhanced OCR with multiple configurations for better text extraction."""
+        try:
+            import pytesseract
+            
+            # Try multiple OCR configurations
+            configs = [
+                '--psm 6',  # Uniform block of text
+                '--psm 3',  # Fully automatic page segmentation
+                '--psm 11', # Sparse text
+                '--psm 12'  # Sparse text, OSD
+            ]
+            
+            best_text = ""
+            max_length = 0
+            
+            for config in configs:
+                try:
+                    text = pytesseract.image_to_string(image, config=config)
+                    if len(text) > max_length:
+                        max_length = len(text)
+                        best_text = text
+                except:
+                    continue
+            
+            return best_text
+        except:
+            return ""
+    
+    def _detect_visual_content(self, image) -> bool:
+        """Detect if image contains significant non-text visual content."""
+        try:
+            import numpy as np
+            from PIL import ImageFilter, ImageStat
+            
+            # Convert to grayscale for analysis
+            gray_image = image.convert('L')
+            
+            # Apply edge detection to find non-text elements
+            edges = gray_image.filter(ImageFilter.FIND_EDGES)
+            
+            # Calculate edge density
+            edge_array = np.array(edges)
+            edge_density = np.count_nonzero(edge_array) / edge_array.size
+            
+            # Calculate variance in pixel values (high variance suggests images/graphics)
+            variance = ImageStat.Stat(gray_image).var[0]
+            
+            # Heuristics for visual content detection
+            has_high_edge_density = edge_density > 0.1
+            has_high_variance = variance > 1000
+            
+            return has_high_edge_density or has_high_variance
+            
+        except Exception:
+            # Fallback: assume visual content if page is large enough
+            return image.size[0] * image.size[1] > 500000  # Roughly A4 size or larger
     
     def _analyze_figure_content(self, image: Image.Image, ocr_text: str, page_num: int, filename: str) -> Optional[Dict[str, Any]]:
         """Analyze image content to determine if it contains a figure."""

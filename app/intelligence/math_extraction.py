@@ -221,7 +221,8 @@ class MathFormulaAnalyzer:
         for category, ops in self.latex_matcher.operation_patterns.items():
             for op in ops:
                 if op in latex_code:
-                    operations.append(f"{category}:{op.replace('\\\\', '')}")
+                    cleaned_op = op.replace('\\\\', '')
+                    operations.append(f"{category}:{cleaned_op}")
         
         return operations
     

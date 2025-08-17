@@ -127,6 +127,12 @@ def start_server(port):
         signal.signal(signal.SIGTERM, signal_handler)
         
         print("✅ Dependencies loaded successfully")
+        
+        # Warm up the system
+        from app.pipeline.manager import PipelineManager
+        manager = PipelineManager.get_instance()
+        manager.warm_up()
+        
         print("✅ Advanced features initialized:")
         print("   • Cross-encoder reranking with BERT/RoBERTa")
         print("   • Mathematical formula extraction (LaTeX, SymPy)")
@@ -175,6 +181,10 @@ def main():
     """Main function to run the server startup."""
     print("🚀 Advanced RAG System - Server Startup")
     print("=" * 50)
+    
+    # Ensure we're in the correct directory
+    script_dir = Path(__file__).parent
+    os.chdir(script_dir)
     
     # Check if we're in the right directory
     if not Path("app").exists():

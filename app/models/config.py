@@ -15,10 +15,10 @@ class Settings(BaseSettings):
 
     # Embeddings / Generation
     embedding_backend: Literal["openai", "cohere", "sentence-transformers", "hash"] = Field(
-        default="hash"
+        default="sentence-transformers"
     )
-    embedding_model: str = Field(default="hash")
-    generation_backend: Literal["openai", "anthropic", "ollama"] = Field(default="openai")
+    embedding_model: str = Field(default="all-MiniLM-L6-v2")
+    generation_backend: Literal["openai", "anthropic", "ollama", "echo"] = Field(default="echo")
     generation_model: str = Field(default="gpt-4o")
 
     # Retrieval

@@ -49,13 +49,20 @@ PyJWT==2.8.0
 # Additional dependencies for new features
 psutil==5.9.5
 
+# Ollama and local model support
+ollama==0.3.1
+
+# Enhanced image processing
+opencv-python==4.8.1.78
+Pillow==10.4.0
+
 # Math and code processing
 sympy==1.12
 matplotlib==3.8.2
 pygments==2.17.2
 
 # Translation services
-googletrans==4.0.0rc1
+googletrans==3.1.0a0
 python-dateutil==2.8.2
 
 

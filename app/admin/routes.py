@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
@@ -40,10 +40,31 @@ def hot_swap_embeddings(backend: str, model: str, x_api_key: str | None = Header
 @admin_router.post("/hot-swap/generation")
 def hot_swap_generation(backend: str, model: str, x_api_key: str | None = Header(default=None)) -> Dict[str, str]:
     _auth(x_api_key)
-    s = get_settings()
-    s.generation_backend = backend
-    s.generation_model = model
-    return {"status": "ok", "generation_backend": backend, "generation_model": model}
+    
+    # Validate backend and model
+    from app.generation.factory import ModelRegistry
+    if not ModelRegistry.is_model_available(backend, model):
+        # Still allow it but with a warning
+        pass
+    
+    try:
+        # Test the model by creating a factory instance
+        factory = GenerationFactory(backend=backend, model=model)
+        client = factory.build()
+        
+        # Update settings
+        s = get_settings()
+        s.generation_backend = backend
+        s.generation_model = model
+        
+        return {
+            "status": "ok", 
+            "generation_backend": backend, 
+            "generation_model": model,
+            "message": f"Successfully switched to {backend}:{model}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to initialize {backend}:{model} - {str(e)}")
 
 
 @admin_router.post("/hot-swap/retriever")
@@ -52,6 +73,53 @@ def hot_swap_retriever(backend: str, x_api_key: str | None = Header(default=None
     s = get_settings()
     s.retriever_backend = backend
     return {"status": "ok", "retriever_backend": backend}
+
+
+@admin_router.get("/models/available")
+def get_available_models(x_api_key: str | None = Header(default=None)) -> Dict[str, Dict]:
+    """Get all available models organized by backend."""
+    _auth(x_api_key)
+    
+    from app.generation.factory import ModelRegistry
+    
+    available_models = ModelRegistry.get_available_models()
+    
+    # Check Ollama status and get real available models
+    try:
+        import httpx
+        with httpx.Client(base_url="http://127.0.0.1:11434", timeout=5.0) as client:
+            response = client.get("/api/tags")
+            if response.status_code == 200:
+                data = response.json()
+                ollama_models = [model["name"] for model in data.get("models", [])]
+                available_models["ollama"] = {
+                    model: ModelRegistry.get_model_config("ollama", model) or {"max_tokens": 2048, "context_window": 4096}
+                    for model in ollama_models
+                }
+                # Add a status indicator
+                available_models["_ollama_status"] = "running"
+            else:
+                available_models["_ollama_status"] = "not_running"
+    except Exception:
+        available_models["_ollama_status"] = "not_running"
+    
+    return available_models
+
+
+@admin_router.get("/models/status")
+def get_model_status(x_api_key: str | None = Header(default=None)) -> Dict[str, str]:
+    """Get current model configuration status."""
+    _auth(x_api_key)
+    
+    s = get_settings()
+    
+    return {
+        "generation_backend": s.generation_backend,
+        "generation_model": s.generation_model,
+        "embedding_backend": s.embedding_backend,
+        "embedding_model": s.embedding_model,
+        "retriever_backend": s.retriever_backend
+    }
 
 
 @admin_router.get("/dashboard", response_class=HTMLResponse)

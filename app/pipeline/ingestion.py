@@ -24,24 +24,78 @@ class IngestionPipeline:
         self.retriever = retriever or HybridRetrievalService()
         self.settings = get_settings()
         
-        # Initialize advanced intelligence components
-        self.table_extractor = TableExtractor()
-        self.figure_extractor = FigureExtractor()
-        self.structure_analyzer = DocumentStructureAnalyzer()
-        self.language_detector = LanguageDetector()
-        self.language_analyzer = DocumentLanguageAnalyzer()
-        self.version_manager = DocumentVersionManager()
-        self.semantic_chunker = SemanticChunker(ChunkingConfig(
-            min_chunk_size=200,
-            max_chunk_size=1000,
-            similarity_threshold=0.3
-        ))
-        self.math_extractor = MathFormulaExtractor()
-        self.code_extractor = CodeSnippetExtractor()
+        # Initialize advanced intelligence components lazily
+        self._table_extractor = None
+        self._figure_extractor = None
+        self._structure_analyzer = None
+        self._language_detector = None
+        self._language_analyzer = None
+        self._version_manager = None
+        self._semantic_chunker = None
+        self._math_extractor = None
+        self._code_extractor = None
         
         # Ensure uploads dir exists
         self.uploads_dir = Path(self.settings.uploads_dir)
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
+    
+    @property
+    def table_extractor(self):
+        if self._table_extractor is None:
+            self._table_extractor = TableExtractor()
+        return self._table_extractor
+    
+    @property
+    def figure_extractor(self):
+        if self._figure_extractor is None:
+            self._figure_extractor = FigureExtractor()
+        return self._figure_extractor
+    
+    @property
+    def structure_analyzer(self):
+        if self._structure_analyzer is None:
+            self._structure_analyzer = DocumentStructureAnalyzer()
+        return self._structure_analyzer
+    
+    @property
+    def language_detector(self):
+        if self._language_detector is None:
+            self._language_detector = LanguageDetector()
+        return self._language_detector
+    
+    @property
+    def language_analyzer(self):
+        if self._language_analyzer is None:
+            self._language_analyzer = DocumentLanguageAnalyzer()
+        return self._language_analyzer
+    
+    @property
+    def version_manager(self):
+        if self._version_manager is None:
+            self._version_manager = DocumentVersionManager()
+        return self._version_manager
+    
+    @property
+    def semantic_chunker(self):
+        if self._semantic_chunker is None:
+            self._semantic_chunker = SemanticChunker(ChunkingConfig(
+                min_chunk_size=200,
+                max_chunk_size=1000,
+                similarity_threshold=0.3
+            ))
+        return self._semantic_chunker
+    
+    @property
+    def math_extractor(self):
+        if self._math_extractor is None:
+            self._math_extractor = MathFormulaExtractor()
+        return self._math_extractor
+    
+    @property
+    def code_extractor(self):
+        if self._code_extractor is None:
+            self._code_extractor = CodeSnippetExtractor()
+        return self._code_extractor
 
     def _decode_content(self, doc: UploadDocument) -> bytes:
         if doc.content_base64:
@@ -49,30 +103,85 @@ class IngestionPipeline:
         raise ValueError("URL fetch not implemented in this skeleton")
 
     def _extract_text_from_pdf(self, content: bytes) -> str:
+        """Enhanced PDF text extraction with mixed content support."""
         try:
             import pypdf
-
-            reader = pypdf.PdfReader(io.BytesIO(content))
-            texts = []
-            for page in reader.pages:
-                texts.append(page.extract_text() or "")
-            candidate = "\n".join(texts)
-            if candidate.strip():
-                return candidate
-        except Exception:
-            pass
-        # Fallback to OCR for scanned PDFs
-        try:
             from pdf2image import convert_from_bytes
             import pytesseract
 
-            images = convert_from_bytes(content)
-            ocr_texts = []
-            for img in images:
-                ocr_texts.append(pytesseract.image_to_string(img))
-            return "\n".join(ocr_texts)
-        except Exception:
-            return ""
+            reader = pypdf.PdfReader(io.BytesIO(content))
+            combined_texts = []
+            
+            # Convert PDF to images for OCR processing
+            try:
+                images = convert_from_bytes(content, dpi=150)
+            except Exception:
+                images = []
+            
+            for page_num, page in enumerate(reader.pages):
+                page_text = ""
+                
+                # Method 1: Extract selectable text
+                extractable_text = page.extract_text() or ""
+                
+                # Method 2: OCR the entire page image
+                ocr_text = ""
+                if page_num < len(images):
+                    try:
+                        ocr_text = pytesseract.image_to_string(images[page_num], config='--psm 6')
+                    except Exception:
+                        pass
+                
+                # Combine both methods intelligently
+                if extractable_text.strip() and ocr_text.strip():
+                    # Both methods found text - combine with smart deduplication
+                    page_text = self._merge_pdf_text_sources(extractable_text, ocr_text)
+                elif extractable_text.strip():
+                    # Only selectable text found
+                    page_text = extractable_text
+                elif ocr_text.strip():
+                    # Only OCR text found (scanned/image content)
+                    page_text = ocr_text
+                
+                if page_text.strip():
+                    combined_texts.append(f"[Page {page_num + 1}]\n{page_text}")
+            
+            return "\n\n".join(combined_texts)
+            
+        except Exception as e:
+            print(f"Enhanced PDF extraction failed: {e}")
+            # Fallback to basic OCR
+            try:
+                from pdf2image import convert_from_bytes
+                import pytesseract
+
+                images = convert_from_bytes(content)
+                ocr_texts = []
+                for i, img in enumerate(images):
+                    ocr_text = pytesseract.image_to_string(img)
+                    if ocr_text.strip():
+                        ocr_texts.append(f"[Page {i + 1}]\n{ocr_text}")
+                return "\n\n".join(ocr_texts)
+            except Exception:
+                return ""
+    
+    def _merge_pdf_text_sources(self, extractable_text: str, ocr_text: str) -> str:
+        """Intelligently merge text from pypdf and OCR to avoid duplication."""
+        # Simple approach: if OCR text is much longer, it likely captured image content
+        extractable_words = len(extractable_text.split())
+        ocr_words = len(ocr_text.split())
+        
+        # If OCR found significantly more content, it likely includes image text
+        if ocr_words > extractable_words * 1.5:
+            return f"{extractable_text}\n\n[OCR Content]\n{ocr_text}"
+        
+        # If they're similar length, prefer extractable text (higher quality)
+        elif extractable_words > ocr_words * 0.8:
+            return extractable_text
+        
+        # OCR found unique content (likely from images)
+        else:
+            return f"{extractable_text}\n\n[Image Text]\n{ocr_text}"
 
     def _extract_texts_from_pdf(self, content: bytes) -> List[str]:
         # Page-wise extraction; falls back to OCR page-wise
@@ -190,10 +299,31 @@ class IngestionPipeline:
             except Exception as e:
                 print(f"Table extraction failed: {e}")
             
-            # Extract figures
+            # Extract figures and integrate with text
             try:
                 figures = self.figure_extractor.extract_figures_from_pdf(content, doc.filename)
                 extraction_result['figures'] = figures
+                
+                # If figures contain significant text content, append to main text
+                figure_texts = []
+                for figure in figures:
+                    if figure.get('description') and len(figure['description'].strip()) > 50:
+                        caption = figure.get('caption', '')
+                        description = figure['description']
+                        page_num = figure.get('page', 'Unknown')
+                        
+                        figure_text = f"\n[Figure from Page {page_num}]"
+                        if caption:
+                            figure_text += f"\nCaption: {caption}"
+                        figure_text += f"\nContent: {description}\n"
+                        figure_texts.append(figure_text)
+                
+                if figure_texts:
+                    # Append figure content to main text
+                    current_text = extraction_result.get('text', '')
+                    enhanced_text = current_text + "\n\n[EXTRACTED FIGURE CONTENT]\n" + "\n".join(figure_texts)
+                    extraction_result['text'] = enhanced_text
+                    
             except Exception as e:
                 print(f"Figure extraction failed: {e}")
         

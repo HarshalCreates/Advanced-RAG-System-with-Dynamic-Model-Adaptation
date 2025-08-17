@@ -188,7 +188,10 @@ class LLMJudgeClient:
         """Setup clients for different models."""
         try:
             import openai
-            self.clients['openai'] = openai.AsyncOpenAI()
+            from app.models.config import get_settings
+            
+            settings = get_settings()
+            self.clients['openai'] = openai.AsyncOpenAI(api_key=settings.openai_api_key)
         except ImportError:
             pass
         

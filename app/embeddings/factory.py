@@ -14,8 +14,10 @@ class EmbeddingClient:
 class OpenAIEmbeddings(EmbeddingClient):
     def __init__(self, model: str) -> None:
         from openai import OpenAI
-
-        self.client = OpenAI()
+        from app.models.config import get_settings
+        
+        settings = get_settings()
+        self.client = OpenAI(api_key=settings.openai_api_key)
         self.model = model
 
     def embed(self, texts: List[str]) -> np.ndarray:
