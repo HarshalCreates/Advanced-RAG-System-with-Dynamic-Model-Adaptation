@@ -1,47 +1,56 @@
+# Production-ready Dockerfile for Advanced RAG System
 FROM python:3.11-slim
 
+# Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
 
-# System deps for OCR and PDF rasterization
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
-    libtesseract-dev \
+    tesseract-ocr-eng \
     poppler-utils \
     curl \
+    build-essential \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash app \
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash --uid 1000 app
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt ./
+RUN pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir \
+        pdf2image==1.16.3 \
+        pytesseract==0.3.10 \
+        opencv-python-headless==4.8.1.78
+
+# Create directories and set permissions
+RUN mkdir -p /app/data /app/uploads /app/logs \
     && chown -R app:app /app
 
-# Copy requirements first for better caching
-COPY requirements.txt ./
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
-
 # Copy application code
-COPY . .
-
-# Change ownership to app user
-RUN chown -R app:app /app
+COPY --chown=app:app . .
 
 # Switch to non-root user
 USER app
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health || exit 1
+HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # Expose ports
-EXPOSE 8000
-EXPOSE 8501
+EXPOSE 8000 8001
 
-# Default command (can be overridden in docker-compose)
+# Default command
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 
