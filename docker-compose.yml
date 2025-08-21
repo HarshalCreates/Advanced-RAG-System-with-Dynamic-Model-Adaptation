@@ -1,0 +1,218 @@
+version: '3.8'
+
+services:
+  # FastAPI Backend Service
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: advanced_rag_api
+    ports:
+      - "8000:8000"
+    environment:
+      # Python Configuration
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "/app"
+      
+      # API Keys
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      
+      # Service URLs
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      
+      # Security
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-admin-secret-key}
+      
+      # Application Configuration
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      WORKERS: ${API_WORKERS:-1}
+      
+      # OCR Configuration
+      TESSDATA_PREFIX: "/usr/share/tesseract-ocr/5/tessdata/"
+      
+    volumes:
+      - rag_data:/app/data
+      - rag_uploads:/app/uploads
+      - rag_logs:/app/logs
+      - ./uploads:/app/data/uploads:rw
+    networks:
+      - rag_network
+    command: >
+      uvicorn app.main:app 
+      --host 0.0.0.0 
+      --port 8000 
+      --workers ${API_WORKERS:-1}
+      --log-level ${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
+  # Chainlit Frontend Service
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: advanced_rag_ui
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+    environment:
+      # Chainlit Configuration
+      CHAINLIT_HOST: "0.0.0.0"
+      CHAINLIT_PORT: "8001"
+      
+      # API Configuration
+      RAG_API_BASE: "http://api:8000"
+      RAG_ADMIN_API_KEY: ${ADMIN_API_KEY:-admin-secret-key}
+      
+      # Python Configuration
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "/app"
+      
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      
+    volumes:
+      - rag_data:/app/data:ro
+      - rag_uploads:/app/uploads:ro
+      - rag_logs:/app/logs
+    networks:
+      - rag_network
+    command: >
+      chainlit run ui/chainlit/langchain_app.py 
+      --host 0.0.0.0 
+      --port 8001
+      --headless
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  # Ollama Service for Local LLM Support
+  ollama:
+    image: ollama/ollama:latest
+    container_name: advanced_rag_ollama
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_HOST: "0.0.0.0"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - rag_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 4G
+    profiles:
+      - ollama
+      - full
+
+  # Redis Cache (Optional - for production scaling)
+  redis:
+    image: redis:7-alpine
+    container_name: advanced_rag_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - rag_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    profiles:
+      - cache
+      - full
+
+  # Nginx Reverse Proxy (Optional - for production)
+  nginx:
+    image: nginx:alpine
+    container_name: advanced_rag_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+      - ui
+    networks:
+      - rag_network
+    restart: unless-stopped
+    profiles:
+      - nginx
+      - full
+
+volumes:
+  rag_data:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: ./data
+  rag_uploads:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: ./uploads
+  rag_logs:
+    driver: local
+  ollama_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  rag_network:
+    driver: bridge
+    name: advanced_rag_network
+
+
