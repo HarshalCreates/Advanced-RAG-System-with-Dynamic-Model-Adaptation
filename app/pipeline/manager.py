@@ -134,37 +134,8 @@ class PipelineManager:
         total_time = time.time() - start_time
         
         # Step 5: Build response
-        # Create proper citations
-        citations = []
-        for doc_id, score in retrieved_docs[:3]:  # Use top 3 documents
-            doc_text = self.retriever.get_text(doc_id)
-            excerpt = doc_text[:300] if doc_text and len(doc_text) > 300 else (doc_text or "No content available")
-            
-            # Extract source and page info
-            source = doc_id.split("__")[0] if "__" in doc_id else doc_id
-            page = None
-            if "__" in doc_id:
-                parts = doc_id.split("__")
-                for part in parts:
-                    if part.startswith("p") and part[1:].isdigit():
-                        page = int(part[1:])
-                        break
-                    elif part.startswith("page") and part[4:].isdigit():
-                        page = int(part[4:])
-                        break
-                    elif part.isdigit():
-                        page = int(part)
-                        break
-            
-            citations.append(RetrievedChunk(
-                document=source,
-                pages=[page] if page else [],
-                chunk_id=doc_id,
-                excerpt=excerpt,
-                relevance_score=float(score),
-                credibility_score=0.85,  # Default credibility score
-                extraction_method="fusion"
-            ))
+        # Create intelligent citations that prioritize relevant documents
+        citations = self._create_intelligent_citations(request.query, retrieved_docs)
         
         # Create enhanced context analysis
         retrieval_methods = ["dense", "sparse"]
@@ -497,7 +468,7 @@ Please provide an answer that combines the dynamic general knowledge with specif
                                 excerpt=doc_text[:150] if doc_text else "No content",
                                 relevance_score=float(score),
                                 credibility_score=0.75,
-                                extraction_method="alternative_retrieval"
+                                extraction_method="fusion"
                             ))
                         
                         alternatives.append(AlternativeAnswer(
@@ -608,7 +579,7 @@ Please provide an answer that combines the dynamic general knowledge with specif
                 excerpt=text[:500],
                 relevance_score=float(score),
                 credibility_score=0.9,  # Higher for reasoning-based results
-                extraction_method="reasoning_enhanced"
+                                                extraction_method="fusion"
             )
             chunks.append(chunk)
 
@@ -908,5 +879,101 @@ Please provide an answer that combines the dynamic general knowledge with specif
         
         else:
             return f"{subject.title()} is a topic that encompasses various concepts, applications, and implementations."
+
+    def _create_intelligent_citations(self, query: str, retrieved_docs: List[Tuple[str, float]]) -> List[RetrievedChunk]:
+        """Create intelligent citations that prioritize documents containing query-specific terms."""
+        citations = []
+        
+        # Extract key terms from query
+        query_terms = set(query.lower().split())
+        
+        # Score documents based on query relevance and content
+        scored_docs = []
+        for doc_id, score in retrieved_docs:
+            doc_text = self.retriever.get_text(doc_id)
+            if not doc_text:
+                continue
+                
+            # Calculate content relevance score
+            content_score = 0.0
+            doc_text_lower = doc_text.lower()
+            
+            # Check for exact query term matches
+            for term in query_terms:
+                if len(term) > 2:  # Only consider meaningful terms
+                    term_count = doc_text_lower.count(term)
+                    content_score += term_count * 0.1
+            
+            # Check for document name relevance
+            doc_name = doc_id.split("__")[0].lower()
+            for term in query_terms:
+                if len(term) > 2 and term in doc_name:
+                    content_score += 0.5  # Boost for document name matches
+            
+            # Combine original score with content relevance
+            final_score = score + content_score
+            scored_docs.append((doc_id, score, final_score, doc_text))
+        
+        # Sort by final score (highest first)
+        scored_docs.sort(key=lambda x: x[2], reverse=True)
+        
+        # Create citations from top documents
+        for doc_id, original_score, final_score, doc_text in scored_docs[:3]:
+            excerpt = doc_text[:300] if doc_text and len(doc_text) > 300 else (doc_text or "No content available")
+            
+            # Enhanced page number extraction
+            source, page = self._extract_document_info(doc_id)
+            
+            citations.append(RetrievedChunk(
+                document=source,
+                pages=[page] if page else [],
+                chunk_id=doc_id,
+                excerpt=excerpt,
+                relevance_score=float(original_score),  # Keep original score for display
+                credibility_score=0.85,
+                extraction_method="fusion"
+            ))
+        
+        return citations
+
+    def _extract_document_info(self, doc_id: str) -> tuple[str, int]:
+        """Extract document source name and page number from document ID."""
+        source = doc_id
+        page = None
+        
+        if "__" in doc_id:
+            parts = doc_id.split("__")
+            source = parts[0]
+            
+            # Enhanced page number extraction patterns
+            for part in parts[1:]:
+                # Pattern 1: p123 (page 123)
+                if part.startswith("p") and part[1:].isdigit():
+                    page = int(part[1:])
+                    break
+                # Pattern 2: page123 (page 123)
+                elif part.startswith("page") and part[4:].isdigit():
+                    page = int(part[4:])
+                    break
+                # Pattern 3: c0000 (chunk 0) - extract page from chunk
+                elif part.startswith("c") and part[1:].isdigit():
+                    chunk_num = int(part[1:])
+                    # Estimate page number based on chunk (assuming ~500 words per page)
+                    page = (chunk_num // 2) + 1
+                    break
+                # Pattern 4: Just a number (could be page)
+                elif part.isdigit():
+                    page = int(part)
+                    break
+                # Pattern 5: page_123 (page 123)
+                elif part.startswith("page_") and part[5:].isdigit():
+                    page = int(part[5:])
+                    break
+                # Pattern 6: p_123 (page 123)
+                elif part.startswith("p_") and part[2:].isdigit():
+                    page = int(part[2:])
+                    break
+        
+        return source, page
 
 

@@ -1,9 +1,0 @@
-[project]
-name = "Advanced RAG UI"
-description = "Chainlit UI for Advanced RAG backend"
-author = ""
-
-[UI]
-name = "Advanced RAG"
-
-

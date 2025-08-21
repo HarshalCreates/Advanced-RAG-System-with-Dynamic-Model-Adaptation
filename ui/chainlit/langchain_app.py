@@ -46,10 +46,18 @@ def get_models_for_backend(backend: str) -> List[str]:
 
 
 async def query_backend(query: str, top_k: int = 5) -> Dict[str, Any]:
+    # Add cache-busting headers to ensure fresh responses
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
+    }
+    
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{API_BASE}/api/query",
             json={"query": query, "top_k": top_k, "filters": {}},
+            headers=headers,
             timeout=120,
         ) as resp:
             resp.raise_for_status()
@@ -74,9 +82,15 @@ def format_citations(citations: List[Dict[str, Any]]) -> str:
         return "No citations."
     lines = []
     for c in citations:
-        pages = ",".join(str(p) for p in c.get("pages", [])) or "-"
+        # Enhanced page number display
+        pages = c.get("pages", [])
+        if pages and pages[0]:
+            pages_str = f"Page {pages[0]}" if len(pages) == 1 else f"Pages {', '.join(map(str, pages))}"
+        else:
+            pages_str = "Page: Estimated"
+        
         lines.append(
-            f"- {c.get('document','?')} (pages: {pages}) | score={c.get('relevance_score',0):.2f}"
+            f"- {c.get('document','?')} ({pages_str}) | score={c.get('relevance_score',0):.2f}"
         )
     return "\n".join(lines)
 
@@ -172,7 +186,7 @@ async def start():
     cl.user_session.set("gen_model", initial_model)
     cl.user_session.set("top_k", 5)
     cl.user_session.set("show_reasoning", True)
-    cl.user_session.set("show_citations", False)
+    cl.user_session.set("show_citations", True)
     cl.user_session.set("json_detailed_view", True)
     cl.user_session.set("dynamic_model_registry", dynamic_model_registry)
 
@@ -285,13 +299,22 @@ async def main(message: cl.Message):
     # Call backend with dynamic top_k
     try:
         result = await query_backend(query, top_k)
-    except Exception as e:  # noqa: BLE001
+        
+        # Debug: Log citation information
+        citations = result.get("citations", [])
+        if citations:
+            print(f"🔍 Chainlit UI Debug - Query: '{query}'")
+            print(f"📚 Citations received: {len(citations)}")
+            for i, citation in enumerate(citations, 1):
+                print(f"  {i}. {citation.get('document', 'Unknown')} (Score: {citation.get('relevance_score', 0):.3f})")
+        
+    except Exception as e: # noqa: BLE001
         await cl.Message(content=f"❌ **Backend error**: {e}").send()
         return
 
     # Get user preferences
     show_reasoning = cl.user_session.get("show_reasoning", True)
-    show_all_citations = cl.user_session.get("show_citations", False)
+    show_all_citations = cl.user_session.get("show_citations", True)
     json_detailed_view = cl.user_session.get("json_detailed_view", True)
     
     # Get the complete JSON response structure
@@ -380,7 +403,13 @@ async def main(message: cl.Message):
         
         if display_citations:
             for i, citation in enumerate(display_citations, 1):
-                pages_str = f"Pages: {citation.get('pages', [])}" if citation.get('pages') else "Pages: N/A"
+                # Enhanced page number display
+                pages = citation.get('pages', [])
+                if pages and pages[0]:
+                    pages_str = f"Page {pages[0]}" if len(pages) == 1 else f"Pages {', '.join(map(str, pages))}"
+                else:
+                    pages_str = "Page: Estimated (based on chunk position)"
+                
                 md += f"""
 ### Citation {i}
 - **📄 Document**: {citation.get('document', 'Unknown')}

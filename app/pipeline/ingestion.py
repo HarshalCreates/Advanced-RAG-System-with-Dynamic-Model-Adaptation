@@ -15,7 +15,10 @@ from app.intelligence.table_extraction import TableExtractor, FigureExtractor, D
 from app.intelligence.multilang import LanguageDetector, DocumentLanguageAnalyzer
 from app.intelligence.versioning import DocumentVersionManager
 from app.intelligence.semantic_chunking import SemanticChunker, ChunkingConfig
+from app.intelligence.simple_chunker import simple_chunker
 from app.intelligence.math_extraction import MathFormulaExtractor
+
+from app.intelligence.fallback_image_processor import fallback_processor
 from app.intelligence.code_extraction import CodeSnippetExtractor
 
 
@@ -233,13 +236,24 @@ class IngestionPipeline:
             return content.decode("utf-8", errors="ignore")
 
     def _extract_text_from_image(self, content: bytes) -> str:
+        """Extract text from images with fallback for missing Tesseract."""
         try:
             import pytesseract
 
             img = Image.open(io.BytesIO(content))
-            return pytesseract.image_to_string(img)
-        except Exception:
-            return ""
+            ocr_text = pytesseract.image_to_string(img)
+            if ocr_text.strip():
+                return ocr_text
+            else:
+                # If OCR returns empty, use fallback
+                return fallback_processor.extract_text_from_image(content)
+        except ImportError:
+            # Tesseract not available, use fallback
+            return fallback_processor.extract_text_from_image(content)
+        except Exception as e:
+            print(f"Image processing error: {e}")
+            # Use fallback for any other errors
+            return fallback_processor.extract_text_from_image(content)
 
     def _extract_text_from_txt(self, content: bytes) -> str:
         return content.decode("utf-8", errors="ignore")
@@ -410,15 +424,37 @@ class IngestionPipeline:
 
     def chunk(self, text: str, filename: str = "") -> List[str]:
         """Enhanced chunking using semantic boundaries."""
+        if not text or not text.strip():
+            return []
+        
+        # Try semantic chunking first
         try:
             # Use semantic chunking
             semantic_chunks = self.semantic_chunker.chunk_document(text, filename)
-            return [chunk.text for chunk in semantic_chunks]
+            if semantic_chunks:
+                return [chunk.text for chunk in semantic_chunks]
+            else:
+                # If semantic chunking returns empty, fall back
+                raise Exception("Semantic chunking returned empty result")
         except Exception as e:
             print(f"Semantic chunking failed, falling back to simple chunking: {e}")
-            # Fallback to simple chunking
-            chunks = [c.strip() for c in text.split("\n\n") if c.strip()]
-            return chunks
+            
+        # Fallback to simple chunking
+        try:
+            chunks = simple_chunker.chunk_text_simple(text)
+            if chunks:
+                return chunks
+            else:
+                raise Exception("Simple chunking returned empty result")
+        except Exception as e2:
+            print(f"Simple chunking also failed, using basic split: {e2}")
+            
+        # Final fallback to basic split
+        chunks = [c.strip() for c in text.split("\n\n") if c.strip()]
+        if not chunks:
+            # If still no chunks, create one from the entire text
+            chunks = [text.strip()]
+        return chunks
 
     def process(self, documents: List[UploadDocument], overwrite: bool = False) -> int:
         """Enhanced processing with advanced intelligence features."""

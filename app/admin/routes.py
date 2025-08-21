@@ -24,7 +24,8 @@ admin_router = APIRouter(prefix="/admin")
 
 def _auth(api_key: str | None) -> None:
     s = get_settings()
-    if s.admin_api_key and api_key != s.admin_api_key:
+    # Only require auth if admin API key is actually set and not empty
+    if s.admin_api_key and s.admin_api_key.strip() and api_key != s.admin_api_key:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 

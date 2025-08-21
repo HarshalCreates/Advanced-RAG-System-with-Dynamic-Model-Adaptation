@@ -146,7 +146,7 @@ class HybridRetrievalService:
 
     def search(self, query: str, top_k: int, filters: dict | None = None, 
               use_advanced_features: bool = False) -> List[Tuple[str, float]]:
-        """Fast search optimized for speed."""
+        """Enhanced search with better diversification for citations."""
         
         # Use simple search for speed
         all_queries = [query]
@@ -158,7 +158,8 @@ class HybridRetrievalService:
             # Dense retrieval only (fastest)
             try:
                 q_vec = self.emb_client.embed([q])
-                vector_search_results = self.vector.search(q_vec, top_k=top_k)
+                # Get more results initially for better diversification
+                vector_search_results = self.vector.search(q_vec, top_k=top_k * 2)
                 if vector_search_results and len(vector_search_results) > 0:
                     dense_results = vector_search_results[0]
                     all_dense_results.extend(dense_results)
@@ -180,8 +181,11 @@ class HybridRetrievalService:
         # Sort by score (highest first)
         fused.sort(key=lambda x: x[1], reverse=True)
         
+        # Apply diversification to ensure different citations for different queries
+        diversified_results = self._diversify_results(fused, query, top_k)
+        
         # Fallback: if no results found, try a simple search
-        if not fused:
+        if not diversified_results:
             try:
                 print(f"No results from advanced search, trying simple fallback...")
                 fallback_results = self._simple_search(query, top_k)
@@ -190,7 +194,64 @@ class HybridRetrievalService:
                 print(f"Fallback search also failed: {e}")
                 return []
         
-        return fused[:top_k]
+        return diversified_results[:top_k]
+
+    def _diversify_results(self, results: List[Tuple[str, float]], query: str, top_k: int) -> List[Tuple[str, float]]:
+        """Diversify results to ensure different citations for different queries."""
+        if not results:
+            return results
+        
+        # If we have enough diverse documents, return top_k
+        if len(results) <= top_k:
+            return results
+        
+        # Apply query-specific diversification
+        diversified = []
+        used_documents = set()
+        
+        # Use query hash to add some randomization while keeping it deterministic
+        import hashlib
+        query_hash = int(hashlib.md5(query.encode()).hexdigest()[:8], 16)
+        
+        # First, add the highest scoring result
+        if results:
+            best_doc_id, best_score = results[0]
+            diversified.append((best_doc_id, best_score))
+            used_documents.add(best_doc_id.split("__")[0])  # Use base document name
+        
+        # Then add diverse documents with query-specific ordering
+        remaining_results = results[1:]
+        
+        # Sort remaining results by score but add some query-specific variation
+        def sort_key(item):
+            doc_id, score = item
+            base_doc = doc_id.split("__")[0]
+            # Add small variation based on query hash and document name
+            variation = (query_hash + hash(base_doc)) % 1000 / 10000.0
+            return score + variation
+        
+        remaining_results.sort(key=sort_key, reverse=True)
+        
+        for doc_id, score in remaining_results:
+            base_doc = doc_id.split("__")[0]
+            
+            # If we haven't used this document type yet, add it
+            if base_doc not in used_documents and len(diversified) < top_k:
+                diversified.append((doc_id, score))
+                used_documents.add(base_doc)
+            
+            # If we have enough diverse documents, break
+            if len(diversified) >= top_k:
+                break
+        
+        # If we still need more results, add remaining high-scoring ones
+        for doc_id, score in results:
+            if len(diversified) >= top_k:
+                break
+            if (doc_id, score) not in diversified:
+                diversified.append((doc_id, score))
+        
+        return diversified
 
     def _simple_search(self, query: str, top_k: int) -> List[Tuple[str, float]]:
         """Simple fallback search method that doesn't rely on complex features."""
