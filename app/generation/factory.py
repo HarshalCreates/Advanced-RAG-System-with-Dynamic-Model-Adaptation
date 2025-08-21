@@ -101,7 +101,7 @@ class OllamaGeneration(GenerationClient):
                 "stream": False,
                 "options": {
                     "temperature": 0.7,
-                    "max_tokens": 2048
+                    "num_predict": 2048
                 }
             })
             response.raise_for_status()
@@ -116,7 +116,7 @@ class OllamaGeneration(GenerationClient):
                     "stream": False,
                     "options": {
                         "temperature": 0.7,
-                        "max_tokens": 2048
+                        "num_predict": 2048
                     }
                 })
                 response.raise_for_status()
@@ -138,7 +138,7 @@ class OllamaGeneration(GenerationClient):
                 "stream": True,
                 "options": {
                     "temperature": 0.7,
-                    "max_tokens": 2048
+                    "num_predict": 2048
                 }
             })
             
