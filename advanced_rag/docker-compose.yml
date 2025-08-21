@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: advanced_rag_api
+    ports:
+      - "8000:8000"
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      # Image processing settings
+      TESSERACT_CMD: "/usr/bin/tesseract"
+      ENABLE_OCR: "true"
+      FALLBACK_IMAGE_PROCESSING: "true"
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/data/uploads
+      - ./logs:/app/logs
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  ui:
+    build: .
+    container_name: advanced_rag_ui
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
+    environment:
+      RAG_API_BASE: http://api:8000
+      RAG_ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      CHAINLIT_HOST: 0.0.0.0
+      CHAINLIT_PORT: 8501
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/data/uploads
+    command: chainlit run ui/chainlit/langchain_app.py --host 0.0.0.0 --port 8501
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+# Note: Ollama should be run separately on the host machine
+# Run: ollama serve (on your host machine)
+# Then pull models: ollama pull llama3.2:3b
+
+networks:
+  default:
+    name: advanced_rag_network
+
+
